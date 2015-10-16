@@ -3,28 +3,26 @@
 
 using namespace std;
 
-wchar_t* GetUnicodeString( wchar_t* dest, void* src, int symbolsCount )
+
+bool IsValidFont( IDWriteFactory* factory, wchar_t* filename )
 {
-	int bytesCounts = symbolsCount << 1;
-	memcpy( dest, src, bytesCounts );
-	dest[ symbolsCount ] = CRLF;
-	for( int i = 0; i < symbolsCount; ++i )
-		REVERSE2( dest[ i ] );
-
-	return dest;
-}
-
-
-int main( int argc, const char** argv )
-{
-	IDWriteFactory* factory = nullptr;
+	HRESULT res;
 	IDWriteFontFile* file = nullptr;
 	IDWriteFontFace* face = nullptr;
-	HRESULT res;
 
-	res = DWriteCreateFactory( DWRITE_FACTORY_TYPE_SHARED, __uuidof( IDWriteFactory ), (IUnknown**)&factory );
-	res = factory->CreateFontFileReference( L"arial.ttf", nullptr, &file );
+	res = factory->CreateFontFileReference( filename, nullptr, &file );
+	if( res != S_OK )
+	{
+		PRINT( L"CreateFontFileReference failed\n" );
+		return false;
+	}
+
 	res = factory->CreateFontFace( DWRITE_FONT_FACE_TYPE_TRUETYPE, 1, &file, 0, DWRITE_FONT_SIMULATIONS_NONE, &face );
+	if( res != S_OK )
+	{
+		PRINT( L"CreateFontFace failed\n" );
+		return false;
+	}
 
 	char* data = nullptr;
 	unsigned int size = 0;
@@ -32,59 +30,150 @@ int main( int argc, const char** argv )
 	BOOL exists = false;
 
 	res = face->TryGetFontTable( DWRITE_MAKE_OPENTYPE_TAG( 'n', 'a', 'm', 'e' ), (const void**) &data, &size, &context, &exists );
-	cout << exists << endl;
-	
+	if( res != S_OK || !exists )
+	{
+		PRINT( L"TryGetFontTable failed\n" );
+		return false;
+	}
+
 	char* p = data;
-	
-	Header head = *(Header*)p;
+
+	Header head = *(Header*) p;
 	head.Reverse();
 	p += sizeof( Header );
 
-	HANDLE f = CreateFile( L"arial.txt", GENERIC_WRITE, FILE_SHARE_READ, 0, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, 0 );
-	DWORD dummy = BOM;
-	WriteFile( f, &dummy, 3, 0, 0 );
+	const wchar_t* familyName = nullptr;
+	const wchar_t* ufid = nullptr;
+
+	bool ok = true;
 
 	NameRecord* names = new NameRecord[ head.count ];
 	for( int i = 0; i < head.count; ++i )
 	{
-		names[ i ] = *(NameRecord*) p;
-		names[ i ].Reverse();
+		NameRecord name = *(NameRecord*) p;
+		name.Reverse();
 		p += sizeof( NameRecord );
 
-		stringstream ss;
-		ss << "(" << names[ i ].platformID << "," << names[ i ].encodingID << "," << names[ i ].languageID << "): " << names[ i ].nameID << " - ";
-		
-		WriteFile( f, ss.str().c_str(), ss.str().size(), 0, 0 );
+		const wchar_t** base;
+		if( name.nameID == 1 )
+			base = &familyName;
+		else if( name.nameID == 3 )
+			base = &ufid;
+		else
+			continue;
 
-		if( names[ i ].platformID == 1 && names[ i ].encodingID == 0 && names[ i ].languageID == 0 )
+		wchar_t* buffer = nullptr;
+
+		// mac roman, code page - https://msdn.microsoft.com/en-us/library/windows/desktop/dd317756%28v=vs.85%29.aspx
+		if( name.platformID == 1 && name.encodingID == 0 && name.languageID == 0 )
 		{
-			WriteFile( f, data + head.stringOffset + names[ i ].offset, names[ i ].length, 0, 0 );
-			dummy = CRLF;
-			WriteFile( f, &dummy, 2, 0, 0 );
+			int size = MultiByteToWideChar( 10000, MB_PRECOMPOSED, data + head.stringOffset + name.offset, name.length, nullptr, 0 );
+			buffer = new wchar_t[ size + 1 ];
+			MultiByteToWideChar( 10000, MB_PRECOMPOSED, data + head.stringOffset + name.offset, name.length, buffer, size );
+			buffer[ size ] = 0;
+		}
+		// unicode english
+		else if( name.platformID == 0 && name.encodingID == 3 && name.languageID == 0
+			|| name.platformID == 3 && name.encodingID == 1 && name.languageID == 1033 )
+		{
+			int size = name.length / 2;
+			buffer = new wchar_t[ size + 1 ];
+			memcpy( buffer, data + head.stringOffset + name.offset, name.length );
+			buffer[ size ] = 0;
+			for( int i = 0; i < size; ++i )
+				REVERSE2( buffer[ i ] );
 		}
 		else
 		{
-			int size = names[ i ].length / 2;
-			wchar_t* value = new wchar_t[ size + 1 ];
-			GetUnicodeString( value, data + head.stringOffset + names[ i ].offset, size );
-			
-			int utf8size = WideCharToMultiByte( CP_UTF8, 0, value, size, nullptr, 0, nullptr, nullptr );
-			char* utf8 = new char[ utf8size ];
-			WideCharToMultiByte( CP_UTF8, 0, value, size, utf8, utf8size, nullptr, nullptr );
-			
-			WriteFile( f, utf8, utf8size, 0, 0 );
-			dummy = CRLF;
-			WriteFile( f, &dummy, 2, 0, 0 );
-			delete[] utf8;
-			delete[] value;
+			continue;
+		}
+
+		if( !*base )
+		{
+			*base = buffer;
+			continue;
+		}
+		else if( wcscmp( *base, buffer ) != 0 )
+		{
+			PRINT( L"Font " );
+			PRINT( filename );
+			PRINT( L" has suspicious tags\n" );
+			delete[] buffer;
+			ok = false;
+			break;
 		}
 	}
 
-	CloseHandle( f );
+	if( familyName )
+	{
+		delete[] familyName;
+		familyName = nullptr;
+	}
+
+	if( ufid )
+	{
+		delete[] ufid;
+		ufid = nullptr;
+	}
 
 	face->ReleaseFontTable( context );
 	RELEASE( face );
 	RELEASE( file );
+
+	return ok;
+}
+
+
+int wmain( int argc, const wchar_t** argv )
+{
+	HRESULT res;
+	IDWriteFactory* factory = nullptr;
+	
+	res = DWriteCreateFactory( DWRITE_FACTORY_TYPE_SHARED, __uuidof( IDWriteFactory ), (IUnknown**)&factory );
+	
+	wchar_t dir[ MAX_PATH ];
+	if( argc > 1 )
+	{
+		wcsncpy( dir, argv[ 1 ], MAX_PATH );
+		if( !SetCurrentDirectory( dir ) )
+		{
+			PRINT( L"Wrong directory!" );
+			return 1;
+		}
+	}
+	else
+	{
+		GetCurrentDirectory( MAX_PATH, dir );
+	}
+
+	int len = wcslen( dir );
+	if( len > MAX_PATH - 3 )
+		return 1;
+
+	if( dir[ len ] != '\\' )
+		dir[ len++ ] = '\\';
+
+	dir[ len++ ] = '*';
+
+
+	WIN32_FIND_DATA ffd;
+	HANDLE find = FindFirstFile( dir, &ffd );
+
+	if( find == INVALID_HANDLE_VALUE )
+		return 1;
+
+	do
+	{
+		wchar_t* name = ffd.cFileName;
+		int len = wcslen( name );
+
+		if( wcscmp( name + len - 4, L".ttf" ) == 0 || wcscmp( name + len - 4, L".otf" ) || wcscmp( name + len - 4, L".ttc" ) )
+			IsValidFont( factory, name );
+
+	} while( FindNextFile( find, &ffd ) != 0 );
+
+	
+	FindClose( find );
 	RELEASE( factory );
 
 	return 0;
