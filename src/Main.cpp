@@ -127,7 +127,7 @@ bool CheckFontFile( IDWriteFactory* factory, wchar_t* filename )
 				*base = buffer;
 				continue;
 			}
-			else if( wcscmp( *base, buffer ) != 0 )
+			else if( wcsncmp( *base, buffer, min( wcslen( *base ), wcslen( buffer ) ) ) != 0 )
 			{
 				CONSOLE_RED;
 				PRINT( filename );
