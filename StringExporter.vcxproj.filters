@@ -2,7 +2,7 @@
 <Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup>
     <Filter Include="src">
-      <UniqueIdentifier>{26e2927f-d344-46da-934a-19e72a561cb9}</UniqueIdentifier>
+      <UniqueIdentifier>{4FC737F1-C7A5-4376-A066-2A32D752A2FF}</UniqueIdentifier>
       <Extensions>\src\</Extensions>
     </Filter>
   </ItemGroup>
@@ -15,7 +15,7 @@
     </ClInclude>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="src\Main.cpp">
+    <ClCompile Include="src\StringExporter.cpp">
       <Filter>src</Filter>
     </ClCompile>
   </ItemGroup>

@@ -1,0 +1,3 @@
+• remove spaces and punctuation before comparsion
+• use "white list" of known fonts that no other font should overwrite (for now i found that only Arial was overwritten)
+• create system font checker that repairs registry

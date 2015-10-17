@@ -1,5 +1,25 @@
 ﻿#include "Precompiled.h"
 #include "Datatypes.h"
+#include <map>
+
+using namespace std;
+
+map< int, map< int, map< int, int > > > g_encodingMap;
+
+
+wchar_t* RemoveSpaces( wchar_t* str )
+{
+	static wchar_t symbols[] = L" \t\n\r-,.\\/";
+
+	int len = wcslen( str );
+	for( int i = 0; i < len; ++i )
+	{
+		if( wcschr( symbols, str[ i ] ) )
+			wcscpy( str + i, str + i + 1 );
+	}
+
+	return str;
+}
 
 
 bool CheckFontFile( IDWriteFactory* factory, wchar_t* filename )
@@ -73,7 +93,7 @@ bool CheckFontFile( IDWriteFactory* factory, wchar_t* filename )
 		char* p = data;
 
 		Header head = *(Header*) p;
-		head.Reverse();
+		head.FixByteOrder();
 		p += sizeof( Header );
 
 		const wchar_t* familyName = nullptr;
@@ -81,11 +101,10 @@ bool CheckFontFile( IDWriteFactory* factory, wchar_t* filename )
 
 		bool ok = true;
 
-		NameRecord* names = new NameRecord[ head.count ];
 		for( int i = 0; i < head.count; ++i )
 		{
 			NameRecord name = *(NameRecord*) p;
-			name.Reverse();
+			name.FixByteOrder();
 			p += sizeof( NameRecord );
 
 			const wchar_t** base;
@@ -96,31 +115,42 @@ bool CheckFontFile( IDWriteFactory* factory, wchar_t* filename )
 			else
 				continue;
 
-			wchar_t* buffer = nullptr;
+			// filter out non-english tags
+			if( name.platformID == 1 && name.encodingID != 0 )
+				continue;
 
-			// mac roman, code page - https://msdn.microsoft.com/en-us/library/windows/desktop/dd317756%28v=vs.85%29.aspx
-			if( name.platformID == 1 && name.encodingID == 0 && name.languageID == 0 )
+			if( name.platformID == 3 && name.languageID != 1033 )
+				continue;
+
+			wchar_t* buffer;
+			int size;
+			if( name.platformID == 0 || name.platformID == 3 )
 			{
-				int size = MultiByteToWideChar( 10000, MB_PRECOMPOSED, data + head.stringOffset + name.offset, name.length, nullptr, 0 );
-				buffer = new wchar_t[ size + 1 ];
-				MultiByteToWideChar( 10000, MB_PRECOMPOSED, data + head.stringOffset + name.offset, name.length, buffer, size );
-				buffer[ size ] = 0;
-			}
-			// unicode english
-			else if( name.platformID == 0 && name.encodingID == 3 && name.languageID == 0
-				|| name.platformID == 3 && name.encodingID == 1 && name.languageID == 1033 )
-			{
-				int size = name.length / 2;
+				size = name.length / 2;
 				buffer = new wchar_t[ size + 1 ];
 				memcpy( buffer, data + head.stringOffset + name.offset, name.length );
-				buffer[ size ] = 0;
-				for( int i = 0; i < size; ++i )
-					REVERSE2( buffer[ i ] );
+				for( int j = 0; j < size; ++j )
+					FIXBYTEORDER( buffer[ j ] );
+			}
+			else if( int encoding = g_encodingMap[ name.platformID ][ name.encodingID ][ name.languageID ] )
+			{
+				size = MultiByteToWideChar( encoding, MB_PRECOMPOSED, data + head.stringOffset + name.offset, name.length, nullptr, 0 );
+				buffer = new wchar_t[ size +1 ];
+				MultiByteToWideChar( encoding, MB_PRECOMPOSED, data + head.stringOffset + name.offset, name.length, buffer, size );
 			}
 			else
 			{
+				CONSOLE_WHITE;
+				PRINT( filename );
+				if( numFaces > 1 )
+					PRINTIDX( faceIdx );
+				PRINT( L" Unsupported encoding\n" );
 				continue;
 			}
+
+			buffer[ size ] = 0;
+			_wcslwr_s( buffer, size + 1);
+			RemoveSpaces( buffer );
 
 			if( !*base )
 			{
@@ -175,30 +205,20 @@ bool CheckFontFile( IDWriteFactory* factory, wchar_t* filename )
 
 int wmain( int argc, const wchar_t** argv )
 {
-	HRESULT res;
-	IDWriteFactory* factory = nullptr;
-	
-	res = DWriteCreateFactory( DWRITE_FACTORY_TYPE_SHARED, __uuidof( IDWriteFactory ), (IUnknown**)&factory );
-
-	/*bool ok = IsValidFont( factory, L"batang.ttc", true );
-	PRINT( ok ? L"ok" : L"fail" );
-	PRINTLN();*/
-	
 	wchar_t dir[ MAX_PATH ];
 	if( argc > 1 )
 	{
-		wcsncpy( dir, argv[ 1 ], MAX_PATH );
+		wcscpy_s( dir, MAX_PATH, argv[ 1 ] );
 		if( !SetCurrentDirectory( dir ) )
 		{
 			CONSOLE_WHITE;
 			PRINT( L"Wrong directory!" );
+			system( "pause" );
 			return 1;
 		}
 	}
-	else
-	{
-		GetCurrentDirectory( MAX_PATH, dir );
-	}
+	
+	GetCurrentDirectory( MAX_PATH, dir );	
 
 	int len = wcslen( dir );
 	if( len > MAX_PATH - 3 )
@@ -210,12 +230,24 @@ int wmain( int argc, const wchar_t** argv )
 	dir[ len++ ] = '*';
 	dir[ len++ ] = '\0';
 
+	g_encodingMap[ 1 ][ 0 ][ 0 ] = 10000; // Mac Roman
+	g_encodingMap[ 1 ][ 0 ][ 32 ] = 10000; // Mac Roman
+	g_encodingMap[ 1 ][ 1 ][ 11 ] = 10001; // Mac Japanese
+	g_encodingMap[ 1 ][ 1 ][ 65535 ] = 10001; // Mac Japanese
+	g_encodingMap[ 2 ][ 0 ][ 0 ] = 20127; // 7-bit ascii
+
+	HRESULT res;
+	IDWriteFactory* factory = nullptr;
+
+	res = DWriteCreateFactory( DWRITE_FACTORY_TYPE_SHARED, __uuidof( IDWriteFactory ), (IUnknown**) &factory );
+
 
 	WIN32_FIND_DATA ffd;
 	HANDLE find = FindFirstFile( dir, &ffd );
 
 	if( find != INVALID_HANDLE_VALUE )
 	{
+		int counter = 0;
 		do
 		{
 			if( ffd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY )
@@ -223,11 +255,19 @@ int wmain( int argc, const wchar_t** argv )
 
 			wchar_t* name = ffd.cFileName;
 			int len = wcslen( name );
+			_wcslwr_s( name + len - 4, 5 );
 
 			if( wcscmp( name + len - 4, L".ttf" ) == 0 || wcscmp( name + len - 4, L".otf" ) == 0 || wcscmp( name + len - 4, L".ttc" ) == 0 )
+			{
 				CheckFontFile( factory, name );
+				++counter;
+			}
 
 		} while( FindNextFile( find, &ffd ) != 0 );
+
+		PRINTIDX( counter );
+		PRINT( L" files checked" );
+		PRINTLN();
 	}
 	
 	FindClose( find );

@@ -1,17 +1,16 @@
 #pragma once
 
-
 struct Header
 {
 	USHORT format;
 	USHORT count;
 	USHORT stringOffset;
 
-	void Reverse()
+	void FixByteOrder()
 	{
-		REVERSE2( format );
-		REVERSE2( count );
-		REVERSE2( stringOffset );
+		FIXBYTEORDER( format );
+		FIXBYTEORDER( count );
+		FIXBYTEORDER( stringOffset );
 	}
 };
 
@@ -25,13 +24,13 @@ struct NameRecord
 	USHORT 	length;
 	USHORT 	offset;
 
-	void Reverse()
+	void FixByteOrder()
 	{
-		REVERSE2( platformID );
-		REVERSE2( encodingID );
-		REVERSE2( languageID );
-		REVERSE2( nameID );
-		REVERSE2( length );
-		REVERSE2( offset );
+		FIXBYTEORDER( platformID );
+		FIXBYTEORDER( encodingID );
+		FIXBYTEORDER( languageID );
+		FIXBYTEORDER( nameID );
+		FIXBYTEORDER( length );
+		FIXBYTEORDER( offset );
 	}
 };
